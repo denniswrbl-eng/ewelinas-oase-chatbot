@@ -13,7 +13,7 @@
   style.textContent = `
     .eo-toggle {
       position: fixed;
-      bottom: 90px;
+      bottom: 140px;
       right: 24px;
       width: 56px;
       height: 56px;
@@ -33,7 +33,7 @@
 
     .eo-widget {
       position: fixed;
-      bottom: 158px;
+      bottom: 208px;
       right: 24px;
       width: 300px;
       height: 400px;
