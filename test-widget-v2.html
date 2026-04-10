@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chatbot Widget v2 – Test</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 40px;
+      background: #f0f0f0;
+      color: #333;
+    }
+    h1 { font-size: 24px; }
+    p { color: #666; max-width: 600px; }
+    .info-box {
+      background: #fff;
+      padding: 20px;
+      border-radius: 12px;
+      margin-top: 20px;
+      max-width: 600px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    .info-box h2 { font-size: 16px; margin: 0 0 10px; }
+    .info-box code {
+      background: #f5f5f5;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .info-box ul { padding-left: 20px; }
+    .info-box li { margin: 6px 0; font-size: 14px; }
+  </style>
+</head>
+<body>
+
+  <h1>WRBL Chatbot Widget v2 – Testseite</h1>
+  <p>Das Chatbot-Widget sollte unten rechts erscheinen. Klick auf den Button um den Chat zu öffnen.</p>
+
+  <div class="info-box">
+    <h2>Konfiguration (Ewelinas Oase)</h2>
+    <ul>
+      <li><strong>API:</strong> <code>https://ewelinas-oase-chatbot.pages.dev/api/chat</code></li>
+      <li><strong>Client ID:</strong> <code>ewelinas-oase</code></li>
+      <li><strong>Farbe:</strong> <code>#d4607a</code></li>
+      <li><strong>Quick Replies:</strong> Preise, Öffnungszeiten, Termin, Adresse</li>
+    </ul>
+  </div>
+
+  <div class="info-box" style="margin-top: 16px;">
+    <h2>Was testen?</h2>
+    <ul>
+      <li>Chat öffnen/schließen (Toggle-Button)</li>
+      <li>Quick Replies klicken → verschwinden nach erstem Klick</li>
+      <li>Nachricht tippen + Enter oder Send-Button</li>
+      <li>Antwort sollte kommen (wenn Backend deployed ist)</li>
+      <li>Mobile: Browserfenster auf <480px ziehen → Fullscreen</li>
+      <li>"Powered by WRBL Digital" Link unten</li>
+    </ul>
+  </div>
+
+  <!-- Chatbot Widget v2 Config -->
+  <script>
+    window.WRBL_CHAT_CONFIG = {
+      apiUrl: "https://ewelinas-oase-chatbot.pages.dev/api/chat",
+      clientId: "ewelinas-oase",
+      business: { name: "Ewelinas Oase", short: "E" },
+      theme: { primary: "#d4607a", primaryHover: "#b84d66" },
+      greeting: "Hallo! Schön, dass du vorbeischaust. Wie kann ich dir helfen? 😊",
+      subtitle: "Meistens antworte ich sofort",
+      quickReplies: [
+        { label: "Preise", msg: "Was kostet eine Fußpflege?" },
+        { label: "Öffnungszeiten", msg: "Wann habt ihr geöffnet?" },
+        { label: "Termin buchen", msg: "Ich möchte einen Termin buchen" },
+        { label: "Adresse", msg: "Wo ist der Salon?" }
+      ],
+      position: { bottom: "90px", right: "20px" },
+      font: "Jost"
+    };
+  </script>
+  <script src="chatbot-widget-v2.js"></script>
+
+</body>
+</html>
