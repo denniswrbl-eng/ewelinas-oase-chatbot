@@ -58,6 +58,36 @@ WICHTIGE REGELN:
 // Default client for backward compatibility
 const DEFAULT_CLIENT = "ewelinas-oase";
 
+// ── Rate Limiting (in-memory, pro IP, resets bei Worker-Neustart) ──
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 Minute
+const RATE_LIMIT_MAX = 10; // Max 10 Nachrichten pro Minute pro IP
+
+function isRateLimited(ip) {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now - entry.start > RATE_LIMIT_WINDOW) {
+    rateLimitMap.set(ip, { start: now, count: 1 });
+    return false;
+  }
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX) return true;
+  return false;
+}
+
+// ── Input Sanitization ─────────────────────────────────────────
+const MAX_MESSAGE_LENGTH = 500; // Max 500 Zeichen pro Nachricht
+const MAX_MESSAGES = 20; // Max 20 Nachrichten im Verlauf
+
+function sanitizeMessages(messages) {
+  return messages.slice(-MAX_MESSAGES).map(msg => ({
+    role: msg.role === "assistant" ? "assistant" : "user",
+    content: typeof msg.content === "string"
+      ? msg.content.slice(0, MAX_MESSAGE_LENGTH)
+      : "",
+  }));
+}
+
 // ── CORS Helper ─────────────────────────────────────────────────
 function getCorsHeaders(request, clientConfig) {
   const origin = request.headers.get("Origin") || "";
@@ -81,10 +111,19 @@ export async function onRequestOptions(context) {
 // ── POST (chat) ─────────────────────────────────────────────────
 export async function onRequestPost(context) {
   try {
+    // Rate Limiting
+    const ip = context.request.headers.get("CF-Connecting-IP") || "unknown";
+    if (isRateLimited(ip)) {
+      return new Response(JSON.stringify({ error: "Zu viele Anfragen. Bitte warte einen Moment." }), {
+        status: 429,
+        headers: { "Content-Type": "application/json", ...getCorsHeaders(context.request, null) },
+      });
+    }
+
     const body = await context.request.json();
     const { messages, clientId } = body;
 
-    if (!messages || !Array.isArray(messages)) {
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return new Response(JSON.stringify({ error: "messages array is required" }), {
         status: 400,
         headers: { "Content-Type": "application/json", ...getCorsHeaders(context.request, null) },
@@ -94,6 +133,9 @@ export async function onRequestPost(context) {
     // Resolve client config
     const resolvedId = clientId && CLIENTS[clientId] ? clientId : DEFAULT_CLIENT;
     const client = CLIENTS[resolvedId];
+
+    // Sanitize input: limit length, enforce roles, strip injection attempts
+    const cleanMessages = sanitizeMessages(messages);
 
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
@@ -107,7 +149,7 @@ export async function onRequestPost(context) {
         temperature: 0.7,
         messages: [
           { role: "system", content: client.systemPrompt },
-          ...messages.slice(-20), // Max 20 messages context to save tokens
+          ...cleanMessages,
         ],
       }),
     });
