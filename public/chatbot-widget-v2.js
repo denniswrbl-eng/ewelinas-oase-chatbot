@@ -36,6 +36,13 @@
     font: "Jost"
   }, window.WRBL_CHAT_CONFIG || {});
 
+  // HTML-Escape Funktion (XSS-Schutz für Config-Werte)
+  function esc(str) {
+    const d = document.createElement("div");
+    d.textContent = str || "";
+    return d.innerHTML;
+  }
+
   const P = cfg.theme.primary;
   const PH = cfg.theme.primaryHover;
   const chatHistory = [];
@@ -271,7 +278,7 @@
 
   // Build quick replies HTML
   const qrHTML = cfg.quickReplies.map(qr =>
-    `<button class="wrbl-quick-btn" data-msg="${qr.msg.replace(/"/g, '&quot;')}">${qr.label}</button>`
+    `<button class="wrbl-quick-btn" data-msg="${esc(qr.msg)}">${esc(qr.label)}</button>`
   ).join("");
 
   // HTML
@@ -284,16 +291,16 @@
     <div class="wrbl-widget" id="wrbl-widget">
       <div class="wrbl-header">
         <div class="wrbl-header-info">
-          <div class="wrbl-avatar">${cfg.business.short}</div>
+          <div class="wrbl-avatar">${esc(cfg.business.short)}</div>
           <div class="wrbl-header-text">
-            <h1>${cfg.business.name}</h1>
-            <div class="wrbl-header-sub">${cfg.subtitle}</div>
+            <h1>${esc(cfg.business.name)}</h1>
+            <div class="wrbl-header-sub">${esc(cfg.subtitle)}</div>
           </div>
         </div>
         <button class="wrbl-close" id="wrbl-close">&times;</button>
       </div>
       <div class="wrbl-messages" id="wrbl-messages">
-        <div class="wrbl-msg wrbl-msg-assistant">${cfg.greeting}</div>
+        <div class="wrbl-msg wrbl-msg-assistant">${esc(cfg.greeting)}</div>
       </div>
       ${qrHTML ? `<div class="wrbl-quick-replies" id="wrbl-quick-replies">${qrHTML}</div>` : ""}
       <div class="wrbl-input-area">
