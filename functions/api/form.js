@@ -21,7 +21,7 @@ const CLIENTS = {
       "http://localhost:8788",
     ],
     airtable: {
-      baseId: "app9kLLaDhUOHINFU",
+      baseId: "app9kLLaDhUOHlNFU",
       tableId: "tblk0RXcSfYELhHMN",
     },
   },
@@ -99,11 +99,7 @@ export async function onRequestPost(context) {
                 Name: name.trim(),
                 Email: email ? email.trim() : "",
                 Telefon: phone.trim(),
-                Leistungen: service || "Fußpflege (35 €)",
-                Wunschtermin: preferredDate || "",
-                Quelle: "Website-Formular",
-                Kunde: resolvedClient.name,
-                Status: "Neu",
+                Wunschtermin: (service ? service + " — " : "") + (preferredDate || ""),
               },
             },
           ],
@@ -115,7 +111,7 @@ export async function onRequestPost(context) {
       const err = await airtableRes.text();
       console.error("Airtable API Fehler:", err);
       return jsonResponse(
-        { error: "Anfrage konnte nicht gespeichert werden" },
+        { error: "Anfrage konnte nicht gespeichert werden", details: err },
         500,
         cors
       );
