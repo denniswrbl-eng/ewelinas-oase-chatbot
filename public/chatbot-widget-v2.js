@@ -41,11 +41,9 @@
   const chatHistory = [];
   let quickRepliesShown = true;
 
-  // Font
-  const fontLink = document.createElement("link");
-  fontLink.rel = "stylesheet";
-  fontLink.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(cfg.font)}:wght@300;400;500;600&display=swap`;
-  document.head.appendChild(fontLink);
+  // Font: Use the font already loaded by the host page.
+  // No external Google Fonts request (DSGVO-compliant).
+  // If the host page doesn't load the font, system-ui is used as fallback.
 
   // Styles
   const style = document.createElement("style");
