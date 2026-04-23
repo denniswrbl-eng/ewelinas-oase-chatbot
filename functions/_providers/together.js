@@ -7,7 +7,11 @@
  *
  * Braucht Env-Var: TOGETHER_API_KEY
  * API-Format: OpenAI-kompatibel (wie Groq).
+ *
+ * v2.4: fetch laeuft jetzt ueber fetchWithTimeout (AbortController, Default 8s).
  */
+
+import { fetchWithTimeout } from "./_http.js";
 
 export const name = "together";
 
@@ -27,22 +31,26 @@ export async function generate({ systemPrompt, messages, env }) {
     throw new Error("TOGETHER_API_KEY not configured");
   }
 
-  const response = await fetch("https://api.together.xyz/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${env.TOGETHER_API_KEY}`,
+  const response = await fetchWithTimeout(
+    "https://api.together.xyz/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.TOGETHER_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: env.TOGETHER_MODEL || "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        max_tokens: 1024,
+        temperature: 0.7,
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...messages.slice(-20),
+        ],
+      }),
     },
-    body: JSON.stringify({
-      model: env.TOGETHER_MODEL || "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-      max_tokens: 1024,
-      temperature: 0.7,
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...messages.slice(-20),
-      ],
-    }),
-  });
+    env
+  );
 
   if (!response.ok) {
     const err = await response.text();

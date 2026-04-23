@@ -3,7 +3,11 @@
  *
  * Bleibt der Default-Provider (backward compatible).
  * Braucht Env-Var: GROQ_API_KEY
+ *
+ * v2.4: fetch laeuft jetzt ueber fetchWithTimeout (AbortController, Default 8s).
  */
+
+import { fetchWithTimeout } from "./_http.js";
 
 export const name = "groq";
 
@@ -24,22 +28,26 @@ export async function generate({ systemPrompt, messages, env }) {
     throw new Error("GROQ_API_KEY not configured");
   }
 
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${env.GROQ_API_KEY}`,
+  const response = await fetchWithTimeout(
+    "https://api.groq.com/openai/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: env.GROQ_MODEL || "llama-3.3-70b-versatile",
+        max_tokens: 1024,
+        temperature: 0.7,
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...messages.slice(-20), // Max 20 messages context to save tokens
+        ],
+      }),
     },
-    body: JSON.stringify({
-      model: env.GROQ_MODEL || "llama-3.3-70b-versatile",
-      max_tokens: 1024,
-      temperature: 0.7,
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...messages.slice(-20), // Max 20 messages context to save tokens
-      ],
-    }),
-  });
+    env
+  );
 
   if (!response.ok) {
     const err = await response.text();

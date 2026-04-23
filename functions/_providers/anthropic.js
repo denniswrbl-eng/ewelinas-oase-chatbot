@@ -10,7 +10,11 @@
  * - system-Prompt ist top-level, nicht in messages
  * - messages darf nur "user" und "assistant" Rollen haben
  * - erste Message muss "user" sein
+ *
+ * v2.4: fetch laeuft jetzt ueber fetchWithTimeout (AbortController, Default 8s).
  */
+
+import { fetchWithTimeout } from "./_http.js";
 
 export const name = "anthropic";
 
@@ -44,20 +48,24 @@ export async function generate({ systemPrompt, messages, env }) {
     throw new Error("Anthropic: no valid user messages");
   }
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
+  const response = await fetchWithTimeout(
+    "https://api.anthropic.com/v1/messages",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: cleanMessages,
+      }),
     },
-    body: JSON.stringify({
-      model: env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages: cleanMessages,
-    }),
-  });
+    env
+  );
 
   if (!response.ok) {
     const err = await response.text();
