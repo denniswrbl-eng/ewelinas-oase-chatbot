@@ -231,7 +231,7 @@
       padding: 10px 14px;
       border: 1.5px solid #e0e0e0;
       border-radius: 24px;
-      font-size: 14px;
+      font-size: 16px; /* iOS: < 16px triggert Auto-Zoom auf Fokus */
       font-family: "${cfg.font}", system-ui, sans-serif;
       outline: none;
       transition: border-color 0.2s;
