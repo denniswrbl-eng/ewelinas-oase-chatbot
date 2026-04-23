@@ -1,103 +1,162 @@
 /**
- * WRBL Digital – Multi-Tenant Chatbot Backend v2
+ * WRBL Digital – Multi-Tenant Chatbot Backend v2.4
  * Cloudflare Pages Function
  *
+ * NEU in v2.4: Budget-Schutz
+ * - Hartes Origin/Referer-Enforcement vor jedem LLM-Call (403 bei fremdem Origin)
+ * - Fixed-Window Rate-Limit pro IP+Client via Cloudflare KV (Default: 20 req / 3600s)
+ * - Ohne KV-Binding fail-open + Warn-Log → backward compatible
+ * - Env-Vars (optional): RATE_LIMIT_MAX, RATE_LIMIT_WINDOW
+ * - Binding (erforderlich für RL): RATE_LIMIT_KV (KV-Namespace)
+ *
+ * v2.3: Client-Configs ausgelagert
+ * - Kunden-Konfigurationen liegen jetzt in functions/_clients/<client-id>.js
+ * - Aggregator unter functions/_clients/index.js
+ * - Neue Kunden onboarden: 1 neue Datei + 1 Eintrag in index.js (kein chat.js-Edit noetig)
+ *
+ * v2.2: LLM-Provider-Adapter (Fallback-Kette)
+ * - LLM-Calls laufen ueber functions/_providers/index.js
+ * - Provider-Reihenfolge konfigurierbar per Env-Var LLM_PROVIDER_ORDER
+ *
+ * v2.1: Hybrid-Modus (Rule-Based Fallback + AI)
+ * - mode: "hybrid"   → Rules zuerst prüfen, bei keinem Match → LLM
+ * - mode: "ai-only"  → Immer LLM (wie v2.0)
+ * - mode: "rule-only" → Nur Rules, kein LLM. Bei keinem Match → Standard-Antwort
+ *
  * Accepts optional "clientId" in request body.
- * Falls back to "ewelinas-oase" if none provided (backward compatible).
+ * Falls back to Default-Client if none provided (backward compatible).
  */
 
-// ── Client Configs ──────────────────────────────────────────────
-const CLIENTS = {
-  "ewelinas-oase": {
-    name: "Ewelinas Oase",
-    allowedOrigins: [
-      "https://ewelinas-oase.de",
-      "https://www.ewelinas-oase.de",
-      "https://ewelinas-oase-chatbot.pages.dev",
-    ],
-    systemPrompt: `Du bist der virtuelle Assistent von Ewelinas Oase, einem Fußpflegesalon in Hamm.
+import * as llm from "../_providers/index.js";
+import { resolveClient, CLIENTS, DEFAULT_CLIENT_ID } from "../_clients/index.js";
 
-DEIN STIL:
-- Antworte immer auf Deutsch, freundlich, warm und natürlich
-- Duze die Kunden (du statt Sie)
-- Halte dich kurz: maximal 2–3 Sätze pro Antwort
-- Sei herzlich, aber professionell – wie eine nette Kollegin am Empfang
-- Verwende keine Emojis übermäßig, maximal 1 pro Nachricht wenn passend
-
-WICHTIGE INFOS ÜBER DEN SALON:
-- Name: Ewelinas Oase – Fußpflege in Hamm
-- Inhaberin: Ewelina
-- Adresse: Ostenallee 55, 59063 Hamm
-- Telefon/WhatsApp: 0176 / 31 56 24 54
-- Öffnungszeiten: Mo–Fr 08:00–20:00 Uhr, Sa nach Vereinbarung
-- Fußpflege: 35 € (ca. 45 Min.)
-  → Inklusive: Fußbad, Peeling, Hornhautentfernung, Nägel kürzen & feilen, Eincremen
-- Es wird KEIN Nagellack angeboten
-- Kostenlose Parkplätze direkt vor dem Salon
-
-TERMINBUCHUNG:
-- Termine können NICHT über den Chat gebucht werden
-- Verweise freundlich auf WhatsApp (0176 / 31 56 24 54) oder Anruf
-- Sag sowas wie: "Am besten schreibst du uns kurz per WhatsApp oder rufst an – dann finden wir schnell einen Termin für dich!"
-
-WICHTIGE REGELN:
-- Wenn du etwas nicht weißt, sag das ehrlich und empfehle den direkten Kontakt
-- Erfinde KEINE Informationen (keine Preise, keine Leistungen die nicht oben stehen)
-- Beantworte nur Fragen die mit dem Salon zu tun haben
-- Bei medizinischen Fragen (Diabetes, eingewachsene Nägel etc.): empfehle einen Podologen oder Arzt, Ewelinas Oase bietet kosmetische Fußpflege`,
-  },
-
-  // ── Weitere Kunden hier einfach ergänzen ──
-  // "demo-friseur": {
-  //   name: "Salon Beispiel",
-  //   allowedOrigins: ["https://example.com"],
-  //   systemPrompt: `...`,
-  // },
-};
-
-// Default client for backward compatibility
-const DEFAULT_CLIENT = "ewelinas-oase";
-
-// ── Rate Limiting (in-memory, pro IP, resets bei Worker-Neustart) ──
-const rateLimitMap = new Map();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 Minute
-const RATE_LIMIT_MAX = 10; // Max 10 Nachrichten pro Minute pro IP
-
-function isRateLimited(ip) {
-  const now = Date.now();
-  const entry = rateLimitMap.get(ip);
-  if (!entry || now - entry.start > RATE_LIMIT_WINDOW) {
-    rateLimitMap.set(ip, { start: now, count: 1 });
-    return false;
+// ── Rule Matching Engine ───────────────────────────────────────
+/**
+ * Prüft die letzte User-Nachricht gegen alle Rules des Clients.
+ *
+ * Warum so und nicht anders:
+ * - toLowerCase() für case-insensitive Matching (User schreibt mal groß, mal klein)
+ * - .some() + .includes() statt Regex: Performanter, einfacher zu debuggen
+ * - Nur die LETZTE Nachricht wird geprüft (nicht die History) → verhindert false positives
+ * - Reihenfolge der Rules im Array = Priorität (erste Rule die matcht gewinnt)
+ *
+ * @param {string} userMessage - Die letzte Nachricht des Users
+ * @param {Array} rules - Array von Rule-Objekten aus der Client-Config
+ * @returns {{ matched: boolean, ruleId: string|null, answer: string|null }}
+ */
+function matchRule(userMessage, rules) {
+  if (!rules || !Array.isArray(rules) || rules.length === 0) {
+    return { matched: false, ruleId: null, answer: null };
   }
-  entry.count++;
-  if (entry.count > RATE_LIMIT_MAX) return true;
-  return false;
-}
 
-// ── Input Sanitization ─────────────────────────────────────────
-const MAX_MESSAGE_LENGTH = 500; // Max 500 Zeichen pro Nachricht
-const MAX_MESSAGES = 20; // Max 20 Nachrichten im Verlauf
+  // Nachricht normalisieren: Kleinbuchstaben, Sonderzeichen behalten (für Umlaute)
+  const normalizedMsg = userMessage.toLowerCase().trim();
 
-function sanitizeMessages(messages) {
-  return messages.slice(-MAX_MESSAGES).map(msg => ({
-    role: msg.role === "assistant" ? "assistant" : "user",
-    content: typeof msg.content === "string"
-      ? msg.content.slice(0, MAX_MESSAGE_LENGTH)
-      : "",
-  }));
+  for (const rule of rules) {
+    if (rule.type === "keyword" && Array.isArray(rule.keywords)) {
+      // Prüfe ob MINDESTENS ein Keyword im Text vorkommt
+      const keywordMatch = rule.keywords.some((keyword) =>
+        normalizedMsg.includes(keyword.toLowerCase())
+      );
+
+      if (keywordMatch) {
+        return {
+          matched: true,
+          ruleId: rule.id || "unknown",
+          answer: rule.answer,
+        };
+      }
+    }
+    // Hier könnten später weitere rule.type Varianten ergänzt werden:
+    // - "regex": Regex-basiertes Matching für komplexere Patterns
+    // - "intent": ML-basiertes Intent-Matching (z.B. mit Embeddings)
+    // - "exact": Exakte Übereinstimmung
+  }
+
+  return { matched: false, ruleId: null, answer: null };
 }
 
 // ── CORS Helper ─────────────────────────────────────────────────
 function getCorsHeaders(request, clientConfig) {
   const origin = request.headers.get("Origin") || "";
-  const origins = clientConfig?.allowedOrigins || CLIENTS[DEFAULT_CLIENT].allowedOrigins;
+  const fallbackOrigins = CLIENTS[DEFAULT_CLIENT_ID].allowedOrigins;
+  const origins = clientConfig?.allowedOrigins || fallbackOrigins;
   const allowed = origins.includes(origin) ? origin : origins[0];
   return {
     "Access-Control-Allow-Origin": allowed,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   };
+}
+
+// ── Origin-Enforcement ──────────────────────────────────────────
+/**
+ * Hart prüfen, ob der Request von einem erlaubten Origin kommt.
+ * CORS-Header allein schützen nur Browser-XHR — curl/Python/Postman
+ * wird vom Browser-CORS nicht ausgebremst. Hier: Origin ODER Referer
+ * muss auf der Client-Whitelist stehen. Fehlen beide → abweisen.
+ *
+ * @param {Request} request
+ * @param {Object}  clientConfig
+ * @returns {{ allowed: boolean, reason: string }}
+ */
+function isOriginAllowed(request, clientConfig) {
+  const fallbackOrigins = CLIENTS[DEFAULT_CLIENT_ID].allowedOrigins;
+  const origins = clientConfig?.allowedOrigins || fallbackOrigins;
+  const origin = request.headers.get("Origin") || "";
+  const referer = request.headers.get("Referer") || "";
+
+  if (origin && origins.includes(origin)) {
+    return { allowed: true, reason: "origin-match" };
+  }
+  // Referer enthält volle URL — prüfen, ob sie mit einem erlaubten Origin anfängt
+  if (referer && origins.some((o) => referer.startsWith(o + "/") || referer === o)) {
+    return { allowed: true, reason: "referer-match" };
+  }
+  return { allowed: false, reason: origin || referer ? "not-whitelisted" : "no-origin-header" };
+}
+
+// ── Rate-Limiting (Cloudflare KV) ───────────────────────────────
+/**
+ * Fixed-Window-Counter pro IP: max RATE_LIMIT_MAX Requests in
+ * RATE_LIMIT_WINDOW Sekunden. Nutzt KV-Namespace `RATE_LIMIT_KV`.
+ *
+ * Ohne Binding (lokal / noch nicht konfiguriert) → durchlassen +
+ * Warn-Log. Backward-kompatibel.
+ *
+ * Defaults: 20 Requests / 3600s (1 Stunde) pro IP+Client.
+ *
+ * @param {Object} env
+ * @param {string} clientId
+ * @param {string} ip
+ * @returns {Promise<{ ok: boolean, remaining: number, retryAfter: number }>}
+ */
+async function checkRateLimit(env, clientId, ip) {
+  if (!env.RATE_LIMIT_KV) {
+    console.warn("[rate-limit] KV binding RATE_LIMIT_KV missing — skipping");
+    return { ok: true, remaining: -1, retryAfter: 0 };
+  }
+  const max = Number(env.RATE_LIMIT_MAX) || 20;
+  const windowSec = Number(env.RATE_LIMIT_WINDOW) || 3600;
+  const key = `rl:${clientId}:${ip}`;
+
+  try {
+    const raw = await env.RATE_LIMIT_KV.get(key);
+    const count = raw ? parseInt(raw, 10) : 0;
+
+    if (count >= max) {
+      return { ok: false, remaining: 0, retryAfter: windowSec };
+    }
+
+    // Counter hochzählen, TTL nur beim ersten Write setzen (Fixed-Window)
+    await env.RATE_LIMIT_KV.put(key, String(count + 1), {
+      expirationTtl: windowSec,
+    });
+    return { ok: true, remaining: max - count - 1, retryAfter: 0 };
+  } catch (e) {
+    console.error("[rate-limit] KV error, fail-open:", e.message);
+    return { ok: true, remaining: -1, retryAfter: 0 };
+  }
 }
 
 // ── OPTIONS (preflight) ─────────────────────────────────────────
@@ -111,67 +170,120 @@ export async function onRequestOptions(context) {
 // ── POST (chat) ─────────────────────────────────────────────────
 export async function onRequestPost(context) {
   try {
-    // Rate Limiting
-    const ip = context.request.headers.get("CF-Connecting-IP") || "unknown";
-    if (isRateLimited(ip)) {
-      return new Response(JSON.stringify({ error: "Zu viele Anfragen. Bitte warte einen Moment." }), {
-        status: 429,
-        headers: { "Content-Type": "application/json", ...getCorsHeaders(context.request, null) },
-      });
-    }
-
     const body = await context.request.json();
     const { messages, clientId } = body;
 
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+    if (!messages || !Array.isArray(messages)) {
       return new Response(JSON.stringify({ error: "messages array is required" }), {
         status: 400,
         headers: { "Content-Type": "application/json", ...getCorsHeaders(context.request, null) },
       });
     }
 
-    // Resolve client config
-    const resolvedId = clientId && CLIENTS[clientId] ? clientId : DEFAULT_CLIENT;
-    const client = CLIENTS[resolvedId];
+    // Resolve client config (Fallback auf Default wenn clientId unbekannt)
+    const { id: resolvedId, config: client } = resolveClient(clientId);
 
-    // Sanitize input: limit length, enforce roles, strip injection attempts
-    const cleanMessages = sanitizeMessages(messages);
+    // ── Gate 1: Origin-Enforcement ────────────────────────────
+    // Blockiert non-Browser-Clients (curl/Python/Postman) VOR jedem
+    // teuren LLM-Call. CORS-Header allein reicht nicht.
+    const origCheck = isOriginAllowed(context.request, client);
+    if (!origCheck.allowed) {
+      console.warn(`[${resolvedId}] origin blocked: ${origCheck.reason}`);
+      return new Response(JSON.stringify({ error: "Origin not allowed" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json", ...getCorsHeaders(context.request, client) },
+      });
+    }
 
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${context.env.GROQ_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        max_tokens: 1024,
-        temperature: 0.7,
-        messages: [
-          { role: "system", content: client.systemPrompt },
-          ...cleanMessages,
-        ],
-      }),
-    });
+    // ── Gate 2: Rate-Limit pro IP + Client ────────────────────
+    // Fail-open wenn KV-Binding fehlt (backward compatible).
+    const ip =
+      context.request.headers.get("CF-Connecting-IP") ||
+      context.request.headers.get("X-Forwarded-For") ||
+      "unknown";
+    const rl = await checkRateLimit(context.env, resolvedId, ip);
+    if (!rl.ok) {
+      console.warn(`[${resolvedId}] rate-limit hit for ${ip}`);
+      return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
+        status: 429,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(rl.retryAfter),
+          ...getCorsHeaders(context.request, client),
+        },
+      });
+    }
 
-    if (!response.ok) {
-      const err = await response.text();
-      console.error(`Groq API error [${resolvedId}]:`, err);
+    // ── HYBRID MODE: Erst Rules prüfen, dann ggf. AI ──────────
+    // Bestimme den Modus: Fehlend oder undefiniert = "ai-only" (backward compatible)
+    const mode = client.mode || "ai-only";
+
+    // Letzte User-Nachricht extrahieren (die aktuellste Frage)
+    const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
+
+    if (lastUserMessage && (mode === "hybrid" || mode === "rule-only")) {
+      const ruleResult = matchRule(lastUserMessage.content, client.rules);
+
+      if (ruleResult.matched) {
+        // Rule hat gematcht → Sofort antworten OHNE Groq API-Call
+        // Das spart Tokens und ist schneller (< 5ms statt 500-2000ms)
+        console.log(`[${resolvedId}] Rule matched: ${ruleResult.ruleId}`);
+
+        return new Response(JSON.stringify({
+          reply: ruleResult.answer,
+          clientId: resolvedId,
+          source: "rule",           // Für Debugging: zeigt dass Rule geantwortet hat
+          ruleId: ruleResult.ruleId, // Welche Rule gematcht hat
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...getCorsHeaders(context.request, client) },
+        });
+      }
+
+      // Kein Rule-Match bei "rule-only" → Freundliche Standard-Antwort
+      if (mode === "rule-only") {
+        console.log(`[${resolvedId}] No rule match (rule-only mode)`);
+
+        return new Response(JSON.stringify({
+          reply: "Das kann ich dir leider nicht direkt beantworten. Am besten rufst du uns an oder schreibst uns per WhatsApp – wir helfen dir gerne persönlich weiter! 😊",
+          clientId: resolvedId,
+          source: "rule-fallback",
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...getCorsHeaders(context.request, client) },
+        });
+      }
+
+      // mode === "hybrid" und kein Match → Weiter mit LLM-Provider-Adapter (unten)
+      console.log(`[${resolvedId}] No rule match → forwarding to LLM provider chain`);
+    }
+
+    // ── AI MODE: Via LLM-Provider-Adapter (Fallback-Kette) ──────
+    // Reihenfolge aus env.LLM_PROVIDER_ORDER, Default "groq" (backward compatible).
+    try {
+      const { reply, providerUsed } = await llm.generate({
+        systemPrompt: client.systemPrompt,
+        messages,
+        env: context.env,
+        clientId: resolvedId,
+      });
+
+      return new Response(JSON.stringify({
+        reply,
+        clientId: resolvedId,
+        source: "ai",
+        providerUsed, // Fuer Debugging: zeigt welcher Provider geantwortet hat
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...getCorsHeaders(context.request, client) },
+      });
+    } catch (llmError) {
+      console.error(`LLM provider chain failed [${resolvedId}]:`, llmError.message);
       return new Response(JSON.stringify({ error: "Fehler bei der API-Anfrage" }), {
         status: 500,
         headers: { "Content-Type": "application/json", ...getCorsHeaders(context.request, client) },
       });
     }
-
-    const data = await response.json();
-
-    return new Response(JSON.stringify({
-      reply: data.choices[0].message.content,
-      clientId: resolvedId,
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json", ...getCorsHeaders(context.request, client) },
-    });
   } catch (error) {
     console.error("Error:", error.message);
     return new Response(JSON.stringify({ error: "Fehler bei der API-Anfrage" }), {

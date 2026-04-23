@@ -1,5 +1,10 @@
 (function () {
-  const API_URL = "https://ewelinas-oase-chatbot.pages.dev/api/chat";
+  // API-URL automatisch: lokal relativ (fuer wrangler dev), sonst Production-URL.
+  // Live-Verhalten bleibt 100% gleich: auf ewelinas-oase.de matcht der else-Zweig.
+  const IS_LOCAL = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  const API_URL = IS_LOCAL
+    ? "/api/chat"
+    : "https://ewelinas-oase-chatbot.pages.dev/api/chat";
   const chatHistory = [];
   let quickRepliesShown = true;
 
