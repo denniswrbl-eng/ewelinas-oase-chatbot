@@ -265,13 +265,49 @@
     .wrbl-powered a { color: #999; text-decoration: none; }
     .wrbl-powered a:hover { color: #666; }
 
+    /* Tap-delay + Doppeltap-Zoom auf iOS unterdrücken */
+    .wrbl-toggle, .wrbl-close, .wrbl-quick-btn, .wrbl-send {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+
     @media (max-width: 480px) {
       .wrbl-widget {
         top: 0; left: 0; right: 0; bottom: 0;
-        width: 100%; height: 100%;
+        width: 100%;
+        height: 100vh;            /* Fallback für alte Browser */
+        height: 100dvh;           /* iOS: schrumpft mit URL-Bar + Keyboard */
+        max-height: 100dvh;
         border-radius: 0;
       }
       .wrbl-toggle.wrbl-active { display: none; }
+
+      /* Safe-Area: Header nicht unter Dynamic Island, Input nicht am Home-Indicator */
+      .wrbl-header {
+        padding-top: calc(16px + env(safe-area-inset-top));
+        padding-left: calc(20px + env(safe-area-inset-left));
+        padding-right: calc(20px + env(safe-area-inset-right));
+        flex-shrink: 0;           /* Header darf nicht zusammengequetscht werden */
+      }
+      .wrbl-input-area {
+        padding-bottom: calc(12px + env(safe-area-inset-bottom));
+        padding-left: calc(12px + env(safe-area-inset-left));
+        padding-right: calc(12px + env(safe-area-inset-right));
+        flex-shrink: 0;
+      }
+
+      /* Touch-Target >= 44x44 (WCAG) */
+      .wrbl-close {
+        width: 44px;
+        height: 44px;
+        font-size: 24px;
+      }
+
+      /* Scroll im Chat bleibt im Chat, kein Pull-to-Refresh der Host-Seite */
+      .wrbl-messages {
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+      }
     }
   `;
   document.head.appendChild(style);
@@ -323,15 +359,36 @@
   const sendBtn = document.getElementById("wrbl-send");
   const quickRepliesEl = document.getElementById("wrbl-quick-replies");
 
+  // iOS Keyboard: Widget-Höhe an sichtbaren Viewport anpassen.
+  // Ohne das wird der Header vom Keyboard nach oben aus dem Screen geschoben.
+  function syncViewportHeight() {
+    if (window.innerWidth > 480) return;
+    if (!widget.classList.contains("wrbl-open")) return;
+    if (window.visualViewport) {
+      widget.style.height = window.visualViewport.height + "px";
+      messages.scrollTop = messages.scrollHeight;
+    }
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", syncViewportHeight);
+    window.visualViewport.addEventListener("scroll", syncViewportHeight);
+  }
+
   toggle.addEventListener("click", function () {
     const isOpen = widget.classList.toggle("wrbl-open");
     toggle.classList.toggle("wrbl-active", isOpen);
-    if (isOpen) input.focus();
+    if (isOpen) {
+      syncViewportHeight();
+      input.focus();
+    } else {
+      widget.style.height = ""; // Reset auf CSS-Wert
+    }
   });
 
   closeBtn.addEventListener("click", function () {
     widget.classList.remove("wrbl-open");
     toggle.classList.remove("wrbl-active");
+    widget.style.height = ""; // Reset auf CSS-Wert
   });
 
   if (quickRepliesEl) {
