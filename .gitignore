@@ -10,3 +10,9 @@ node_modules
 
 # Claude Code / local IDE state
 .claude
+
+# Lokale Helper-Skripte / Debug-Dumps
+*.bat
+live-*
+commit-msg*.txt
+_archiv-skripte/
