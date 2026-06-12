@@ -284,7 +284,7 @@
   // HTML
   const container = document.createElement("div");
   container.innerHTML = `
-    <button class="wrbl-toggle" id="wrbl-toggle">
+    <button class="wrbl-toggle" id="wrbl-toggle" aria-label="Chat öffnen">
       <svg class="wrbl-icon-chat" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.2L4 17.2V4h16v12z"/></svg>
       <svg class="wrbl-icon-close" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
     </button>
@@ -297,15 +297,15 @@
             <div class="wrbl-header-sub">${esc(cfg.subtitle)}</div>
           </div>
         </div>
-        <button class="wrbl-close" id="wrbl-close">&times;</button>
+        <button class="wrbl-close" id="wrbl-close" aria-label="Chat schließen">&times;</button>
       </div>
       <div class="wrbl-messages" id="wrbl-messages">
         <div class="wrbl-msg wrbl-msg-assistant">${esc(cfg.greeting)}</div>
       </div>
       ${qrHTML ? `<div class="wrbl-quick-replies" id="wrbl-quick-replies">${qrHTML}</div>` : ""}
       <div class="wrbl-input-area">
-        <input type="text" id="wrbl-input" placeholder="Schreib eine Nachricht..." autocomplete="off">
-        <button class="wrbl-send" id="wrbl-send">
+        <input type="text" id="wrbl-input" placeholder="Schreib eine Nachricht..." aria-label="Ihre Nachricht" autocomplete="off">
+        <button class="wrbl-send" id="wrbl-send" aria-label="Nachricht senden">
           <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
         </button>
       </div>
