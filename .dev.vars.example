@@ -1,0 +1,11 @@
+# .dev.vars — Lokal-Secrets fuer `wrangler pages dev`.
+# Diese Datei zu `.dev.vars` kopieren und ausfuellen.
+# `.dev.vars` ist via .gitignore ausgeschlossen — nie commiten.
+
+# IP-Hash-Salt fuer DSGVO-konformes Chat-Logging (D1).
+# Mind. 32 Zeichen, zufaellig. Generieren z.B.:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+LOG_IP_SALT=replace-me-with-random-32-plus-chars
+
+# Groq-API-Key. In Production via Cloudflare-Secret gesetzt.
+GROQ_API_KEY=

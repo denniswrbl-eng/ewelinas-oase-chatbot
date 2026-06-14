@@ -1,8 +1,15 @@
 /**
- * WRBL Digital – Multi-Tenant Chatbot Backend v2.4
+ * WRBL Digital – Multi-Tenant Chatbot Backend v2.5
  * Cloudflare Pages Function
  *
- * NEU in v2.4: Budget-Schutz
+ * NEU in v2.5: DSGVO-konformes Request-Logging (Cloudflare D1)
+ * - logChatRequest() schreibt pro Anfrage einen Datensatz in D1 (Binding: DB)
+ * - DSGVO-hart: nur SHA-256-Hash von IP+Salt und Prompt + Char-Counts, NIE Klartext
+ * - Geloggt werden alle Antwortpfade: Rule-Match, Rule-Fallback, LLM-Antwort, Fehler
+ * - Fire-and-forget via ctx.waitUntil; ohne DB-Binding No-op → backward compatible
+ * - Env-Var (optional): LOG_IP_SALT (Salt für IP-Hash)
+ *
+ * v2.4: Budget-Schutz
  * - Hartes Origin/Referer-Enforcement vor jedem LLM-Call (403 bei fremdem Origin)
  * - Fixed-Window Rate-Limit pro IP+Client via Cloudflare KV (Default: 20 req / 3600s)
  * - Ohne KV-Binding fail-open + Warn-Log → backward compatible
@@ -159,6 +166,73 @@ async function checkRateLimit(env, clientId, ip) {
   }
 }
 
+// ── DSGVO-konformes Request-Logging (Cloudflare D1) ─────────────
+/**
+ * SHA-256-Hex eines Strings. Genutzt für IP-Hash (IP+Salt) und
+ * Prompt-Hash — damit landet NIE Klartext in der DB.
+ */
+async function sha256hex(text) {
+  const buf = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text)
+  );
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Schreibt einen Logdatensatz nach D1 (Tabelle chatbot_requests).
+ *
+ * DSGVO-hart: gespeichert werden nur SHA-256(ip+salt), SHA-256(prompt)
+ * und die Zeichen-Längen — niemals Klartext-Prompt oder Roh-IP.
+ * Fire-and-forget via ctx.waitUntil; ohne DB-Binding No-op (backward compatible).
+ *
+ * @param {Object} env  - context.env (braucht env.DB + optional env.LOG_IP_SALT)
+ * @param {Object} ctx  - context (für ctx.waitUntil)
+ */
+async function logChatRequest(env, ctx, {
+  request,
+  prompt = "",
+  responseText = "",
+  model = null,
+  latencyMs = 0,
+  status = "ok",
+  error = null,
+}) {
+  if (!env.DB) return;
+  try {
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const salt = env.LOG_IP_SALT || "fallback-salt";
+    const [ipHash, promptHash] = await Promise.all([
+      sha256hex(ip + salt),
+      sha256hex(prompt),
+    ]);
+
+    ctx.waitUntil(
+      env.DB.prepare(`
+        INSERT INTO chatbot_requests
+          (ip_hash, origin, user_agent, prompt_hash, prompt_chars,
+           response_chars, model, latency_ms, status, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        ipHash,
+        request.headers.get("Origin")     || null,
+        request.headers.get("User-Agent") || null,
+        promptHash,
+        prompt.length,
+        responseText.length,
+        model,
+        latencyMs,
+        status,
+        error,
+      ).run()
+    );
+  } catch (e) {
+    console.error("[D1 log] INSERT failed:", e.message);
+  }
+}
+
 // ── OPTIONS (preflight) ─────────────────────────────────────────
 export async function onRequestOptions(context) {
   return new Response(null, {
@@ -169,6 +243,8 @@ export async function onRequestOptions(context) {
 
 // ── POST (chat) ─────────────────────────────────────────────────
 export async function onRequestPost(context) {
+  const startTime = Date.now();
+  let userPrompt = ""; // für DSGVO-Logging (nur Hash + Länge, nie Klartext)
   try {
     const body = await context.request.json();
     const { messages, clientId } = body;
@@ -182,6 +258,10 @@ export async function onRequestPost(context) {
 
     // Resolve client config (Fallback auf Default wenn clientId unbekannt)
     const { id: resolvedId, config: client } = resolveClient(clientId);
+
+    // Letzte User-Nachricht extrahieren (aktuellste Frage) — für Rules + Logging
+    const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
+    userPrompt = lastUserMessage?.content || "";
 
     // ── Gate 1: Origin-Enforcement ────────────────────────────
     // Blockiert non-Browser-Clients (curl/Python/Postman) VOR jedem
@@ -218,9 +298,6 @@ export async function onRequestPost(context) {
     // Bestimme den Modus: Fehlend oder undefiniert = "ai-only" (backward compatible)
     const mode = client.mode || "ai-only";
 
-    // Letzte User-Nachricht extrahieren (die aktuellste Frage)
-    const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
-
     if (lastUserMessage && (mode === "hybrid" || mode === "rule-only")) {
       const ruleResult = matchRule(lastUserMessage.content, client.rules);
 
@@ -228,6 +305,16 @@ export async function onRequestPost(context) {
         // Rule hat gematcht → Sofort antworten OHNE Groq API-Call
         // Das spart Tokens und ist schneller (< 5ms statt 500-2000ms)
         console.log(`[${resolvedId}] Rule matched: ${ruleResult.ruleId}`);
+
+        // Pfad 1/3: Rule-Match loggen
+        logChatRequest(context.env, context, {
+          request: context.request,
+          prompt: userPrompt,
+          responseText: ruleResult.answer || "",
+          model: `rule:${ruleResult.ruleId}`,
+          latencyMs: Date.now() - startTime,
+          status: "ok",
+        });
 
         return new Response(JSON.stringify({
           reply: ruleResult.answer,
@@ -244,8 +331,20 @@ export async function onRequestPost(context) {
       if (mode === "rule-only") {
         console.log(`[${resolvedId}] No rule match (rule-only mode)`);
 
+        const fallbackReply = "Das kann ich dir leider nicht direkt beantworten. Am besten rufst du uns an oder schreibst uns per WhatsApp – wir helfen dir gerne persönlich weiter! 😊";
+
+        // Pfad 1/3 (Variante): Rule-only-Fallback loggen
+        logChatRequest(context.env, context, {
+          request: context.request,
+          prompt: userPrompt,
+          responseText: fallbackReply,
+          model: "rule-fallback",
+          latencyMs: Date.now() - startTime,
+          status: "ok",
+        });
+
         return new Response(JSON.stringify({
-          reply: "Das kann ich dir leider nicht direkt beantworten. Am besten rufst du uns an oder schreibst uns per WhatsApp – wir helfen dir gerne persönlich weiter! 😊",
+          reply: fallbackReply,
           clientId: resolvedId,
           source: "rule-fallback",
         }), {
@@ -268,6 +367,16 @@ export async function onRequestPost(context) {
         clientId: resolvedId,
       });
 
+      // Pfad 2/3: LLM-Antwort loggen (Adapter-Provider als model)
+      logChatRequest(context.env, context, {
+        request: context.request,
+        prompt: userPrompt,
+        responseText: reply || "",
+        model: providerUsed || "ai",
+        latencyMs: Date.now() - startTime,
+        status: "ok",
+      });
+
       return new Response(JSON.stringify({
         reply,
         clientId: resolvedId,
@@ -279,6 +388,18 @@ export async function onRequestPost(context) {
       });
     } catch (llmError) {
       console.error(`LLM provider chain failed [${resolvedId}]:`, llmError.message);
+
+      // Pfad 3/3 (LLM-Fehler): loggen
+      logChatRequest(context.env, context, {
+        request: context.request,
+        prompt: userPrompt,
+        responseText: "",
+        model: null,
+        latencyMs: Date.now() - startTime,
+        status: "error",
+        error: `llm_chain: ${llmError.message}`.slice(0, 300),
+      });
+
       return new Response(JSON.stringify({ error: "Fehler bei der API-Anfrage" }), {
         status: 500,
         headers: { "Content-Type": "application/json", ...getCorsHeaders(context.request, client) },
@@ -286,6 +407,18 @@ export async function onRequestPost(context) {
     }
   } catch (error) {
     console.error("Error:", error.message);
+
+    // Pfad 3/3 (Handler-Fehler / catch): loggen
+    logChatRequest(context.env, context, {
+      request: context.request,
+      prompt: userPrompt,
+      responseText: "",
+      model: null,
+      latencyMs: Date.now() - startTime,
+      status: "error",
+      error: `handler: ${error.message}`.slice(0, 300),
+    });
+
     return new Response(JSON.stringify({ error: "Fehler bei der API-Anfrage" }), {
       status: 500,
       headers: { "Content-Type": "application/json", ...getCorsHeaders(context.request, null) },

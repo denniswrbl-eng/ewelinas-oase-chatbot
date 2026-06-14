@@ -14,3 +14,11 @@ compatibility_date = "2024-12-01"
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
 id = "997293493b7a4a87b9a8d2c577a192bb"
+
+# ── D1-Logging (v2.5) ───────────────────────────────────────────
+# DSGVO-konformes Request-Logging. Ohne Binding No-op (backward compatible).
+# Schema: migrations/0001_init.sql (Tabelle chatbot_requests).
+[[d1_databases]]
+binding       = "DB"
+database_name = "chatbot_requests"
+database_id   = "f22e911d-bb29-426a-9cd8-378b9e6462b6"
