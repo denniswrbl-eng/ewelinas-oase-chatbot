@@ -408,7 +408,10 @@ export async function onRequestPost(context) {
   } catch (error) {
     console.error("Error:", error.message);
 
-    // Pfad 3/3 (Handler-Fehler / catch): loggen
+    // Pfad 3/3 (Handler-Fehler / catch): loggen.
+    // DSGVO: Bei JSON-Parse-Fehlern spiegelt error.message den ROHEN Body
+    // (z.B. Client-Input) — daher generische Meldung statt error.message.
+    const isJsonParseError = error instanceof SyntaxError;
     logChatRequest(context.env, context, {
       request: context.request,
       prompt: userPrompt,
@@ -416,7 +419,9 @@ export async function onRequestPost(context) {
       model: null,
       latencyMs: Date.now() - startTime,
       status: "error",
-      error: `handler: ${error.message}`.slice(0, 300),
+      error: isJsonParseError
+        ? "handler: invalid JSON body"
+        : `handler: ${error.message}`.slice(0, 300),
     });
 
     return new Response(JSON.stringify({ error: "Fehler bei der API-Anfrage" }), {
