@@ -1,0 +1,35 @@
+name: Deploy to Cloudflare Pages
+
+# Auto-Deploy des Ewelinas-Oase-Chatbots (Cloudflare Pages, Direct-Upload-Projekt).
+# Loest den manuellen Dashboard-Upload ab: Push auf main -> Deploy.
+# Manueller Re-Deploy: GitHub UI -> Actions -> "Deploy to Cloudflare Pages" -> Run workflow.
+#
+# Voraussetzung (sonst schlaegt der Run sofort fehl):
+#   Repository-Secrets CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID sind gesetzt.
+# Secrets werden NUR referenziert, niemals inline.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Projektname (name) + Output-Dir (pages_build_output_dir="public")
+          # kommen aus wrangler.toml; functions/ wird automatisch zu
+          # Pages Functions kompiliert. --branch=main => Production-Deployment.
+          command: pages deploy --project-name=ewelinas-oase-chatbot --branch=main
